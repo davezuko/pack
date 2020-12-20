@@ -1,0 +1,12 @@
+{
+  "name": "react-typescript",
+  "version": "1.0.0",
+  "main": "src/main.tsx",
+  "license": "MIT",
+  "dependencies": {
+    "@types/react": "^17.0.0",
+    "@types/react-dom": "^17.0.0",
+    "react": "^17.0.1",
+    "react-dom": "^17.0.1"
+  }
+}

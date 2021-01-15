@@ -64,11 +64,11 @@ func serve(args []string) error {
 
 func start(args []string) error {
 	opts := api.StartOptions{}
-	srv, err := api.Start(opts)
+	result, err := api.Start(opts)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Server running at %s\n", srv.Addr())
-	srv.Wait()
+	fmt.Printf("Server running at %s://%s:%d\n", "http", result.Host, result.Port)
+	result.Wait()
 	return nil
 }

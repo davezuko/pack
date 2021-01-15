@@ -1,10 +1,5 @@
 package api
 
-import (
-	"github.com/davezuko/pack/internal/build"
-	"github.com/davezuko/pack/internal/server"
-)
-
 // NewOptions configures a new project.
 type NewOptions struct {
 	Path     string
@@ -17,6 +12,14 @@ type ServeOptions struct {
 	Port uint16
 	Open bool
 	Path string
+}
+
+// ServeResult holds an active HTTP server.
+type ServeResult struct {
+	Host string
+	Port uint16
+	Wait func() error
+	Stop func()
 }
 
 // StartOptions configures the development server.
@@ -39,22 +42,31 @@ type BuildOptions struct {
 	OutputDir string
 }
 
-// Build builds the project to disk and optimizes assets for production.
-// The destination folder, specified by options.OutputDir, is self-contained
-// and suitable for deployment. For local testing, use the "serve" command
-// to serve the output directory.
-func Build(opts BuildOptions) (build.BuildResult, error) {
+// BuildResult provides diagnostic information about a build.
+type BuildResult struct {
+	Errors   []Message
+	Warnings []Message
+}
+
+type Message struct {
+	Text string
+}
+
+// Build builds the project to options.OutputDir and optimizes assets for
+// production. The output directory will be a self-contained application
+// and suitable for deployment to a static CDN.
+func Build(opts BuildOptions) (BuildResult, error) {
 	return buildImpl(opts)
 }
 
 // Serve serves the assets that were generated from "build".
-func Serve(opts ServeOptions) (server.ServeResult, error) {
+func Serve(opts ServeOptions) (ServeResult, error) {
 	return serveImpl(opts)
 }
 
 // Start starts the development server. Assets in opts.SourceDir are built
 // on demand. Assets in opts.StaticDir are served without modification.
-func Start(opts StartOptions) (server.ServeResult, error) {
+func Start(opts StartOptions) (ServeResult, error) {
 	return startImpl(opts)
 }
 

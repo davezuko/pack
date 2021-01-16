@@ -9,21 +9,43 @@ import (
 
 func runImpl(args []string) {
 	var err error
-	switch args[0] {
-	case "build":
-		err = build(args[1:])
-	case "new":
-		err = new(args[1:])
-	case "serve":
-		err = serve(args[1:])
-	case "start":
-		err = start(args[1:])
-	default:
-		err = fmt.Errorf(`
+
+	if args[0] == "help" {
+		if len(args) == 1 {
+			fmt.Printf("Missing command name\n")
+			os.Exit(1)
+		}
+		switch args[1] {
+		case "build":
+			fmt.Printf("%s\n", buildHelp())
+		case "new":
+			fmt.Printf("%s\n", newHelp())
+		case "serve":
+			fmt.Printf("%s\n", serveHelp())
+		case "start":
+			fmt.Printf("%s\n", startHelp())
+		default:
+			err = fmt.Errorf(`
+			Unknown command: "%s".
+			
+			Tip: run 'pack --help' to see available commands and example usage`, args[1])
+		}
+	} else {
+		switch args[0] {
+		case "build":
+			err = build(args[1:])
+		case "new":
+			err = new(args[1:])
+		case "serve":
+			err = serve(args[1:])
+		case "start":
+			err = start(args[1:])
+		default:
+			err = fmt.Errorf(`
 Unknown command: "%s".
 
 Tip: run 'pack --help' to see available commands and example usage`, args[0])
-		os.Exit(1)
+		}
 	}
 
 	if err != nil {
@@ -35,6 +57,10 @@ Tip: run 'pack --help' to see available commands and example usage`, args[0])
 
 func build(args []string) error {
 	return nil
+}
+
+func buildHelp() string {
+	return ""
 }
 
 func new(args []string) error {
@@ -49,6 +75,9 @@ pack new <my-project>
 	}
 	opts := api.NewOptions{}
 	opts.Path = args[0]
+	if opts.Template == "" {
+		opts.Template = "https://github.com/davezuko/html-template"
+	}
 	err := api.New(opts)
 	if err != nil {
 		return err
@@ -56,10 +85,18 @@ pack new <my-project>
 	return nil
 }
 
+func newHelp() string {
+	return ""
+}
+
 func serve(args []string) error {
 	opts := api.ServeOptions{}
 	api.Serve(opts)
 	return nil
+}
+
+func serveHelp() string {
+	return ""
 }
 
 func start(args []string) error {
@@ -71,4 +108,8 @@ func start(args []string) error {
 	fmt.Printf("Server running at %s://%s:%d\n", "http", result.Host, result.Port)
 	result.Wait()
 	return nil
+}
+
+func startHelp() string {
+	return ""
 }

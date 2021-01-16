@@ -2,8 +2,6 @@ package api
 
 import (
 	"fmt"
-	"io"
-	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -13,17 +11,13 @@ import (
 	"strings"
 	"sync"
 
+	esbuild "github.com/evanw/esbuild/pkg/api"
+
 	"github.com/davezuko/pack/internal/bundler"
 	"github.com/davezuko/pack/internal/fs"
 )
 
 func newImpl(opts NewOptions) error {
-	if opts.Path == "" {
-		return fmt.Errorf("Missing project name")
-	}
-	if opts.Template == "" {
-		opts.Template = "https://github.com/davezuko/html-template"
-	}
 	if fs.Exists(opts.Path) {
 		return fmt.Errorf("destination already exists")
 	}
@@ -56,8 +50,10 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 		opts.StaticDir = "static"
 	}
 
+	sources := http.FileServer(http.Dir(opts.SourceDir))
 	statics := http.FileServer(http.Dir(opts.StaticDir))
-	handler := http.HandlerFunc(func (res http.ResponseWriter, req *http.Request) {
+	pkgBundler := bundler.NewPackageBundler()
+	handler := http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
 		if !(req.Method == "GET" && strings.HasPrefix(req.URL.Path, "/")) {
 			res.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			res.WriteHeader(http.StatusNotFound)
@@ -66,11 +62,17 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 		}
 
 		query := path.Clean(req.URL.Path)
-		if strings.HasSuffix(query, "/") {
-			query += "index.html"
-		}
 		srcPath := path.Join(opts.SourceDir, query)
-		// fmt.Printf("Request: %s -> %s\n", query, srcPath)
+
+		fmt.Printf("Request: %s\n", query)
+		if strings.HasPrefix(query, "/web_modules") {
+			pkg := query
+			pkg = strings.Replace(pkg, "/web_modules/", "", 1)
+			pkg = strings.Replace(pkg, ".js", "", 1)
+			result := pkgBundler.Build(pkg)
+			sendBuildResult(res, result)
+			return
+		}
 
 		// if file does not exist in the source directory, fall back to serving
 		// it from the static directory.
@@ -79,42 +81,17 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 			return
 		}
 
-		f, err := os.Open(srcPath)
-		if err != nil {
-			res.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		defer f.Close()
-
 		switch path.Ext(query) {
-		case ".ts", ".tsx", ".js":
-			// t1 := time.Now().UnixNano() / int64(time.Millisecond)
-			result := bundler.Bundle(srcPath)
-			// t2 := time.Now().UnixNano() / int64(time.Millisecond)
-			// fmt.Printf("Built %s (%dms)\n", srcPath, t2 - t1)
-			if len(result.OutputFiles) != 1 {
-				res.WriteHeader(http.StatusInternalServerError)
+		case ".ts", ".tsx":
+			if opts.Bundle {
+				result := bundler.Bundle(srcPath)
+				sendBuildResult(res, result)
 			} else {
-				res.Header().Add("Content-Type", "text/javascript")
-				res.Write(result.OutputFiles[0].Contents)
-			}
-			if len(result.Warnings) > 0 {
-
-			}
-			if len(result.Errors) > 0 {
-
+				result := bundler.Transform(srcPath)
+				sendBuildResult(res, result)
 			}
 		default:
-			f, err := os.Open(srcPath)
-			if err != nil {
-				res.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			defer f.Close()
-			mt := mime.TypeByExtension(path.Ext(query))
-			res.Header().Set("Content-Type", mt)
-			res.WriteHeader(http.StatusFound)
-			io.Copy(res, f)
+			sources.ServeHTTP(res, req)
 		}
 	})
 	return newServer(newServerOpts{
@@ -123,6 +100,15 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 		Open:    opts.Open,
 		Handler: handler,
 	})
+}
+
+func sendBuildResult(res http.ResponseWriter, result esbuild.BuildResult) {
+	if len(result.OutputFiles) != 1 {
+		res.WriteHeader(http.StatusServiceUnavailable)
+	} else {
+		res.Header().Add("Content-Type", "text/javascript")
+		res.Write(result.OutputFiles[0].Contents)
+	}
 }
 
 func serveImpl(opts ServeOptions) (ServeResult, error) {

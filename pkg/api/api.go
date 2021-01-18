@@ -4,6 +4,7 @@ package api
 type NewOptions struct {
 	Path     string
 	Template string
+	Yarn     bool
 }
 
 // ServeOptions configures the static file server.

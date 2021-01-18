@@ -39,7 +39,7 @@ Examples:
   # Serve your production build
   pack serve
 
-Run 'pack help <command>' for more information on specific commands.
+Run 'pack help <command>' for more information about a specific command.
 `
 }
 

@@ -55,7 +55,7 @@ func runImpl(args []string) {
 			cmd.fs.Parse(flgs)
 			err := cmd.Run(argz)
 			if err != nil {
-				fmt.Printf("%s\n", err)
+				fmt.Printf("\n%s\n\n", err)
 				os.Exit(1)
 			} else {
 				os.Exit(0)
@@ -117,10 +117,19 @@ func newCommand() command {
 		if len(args) == 0 {
 			return fmt.Errorf("Missing directory name. Try `pack new <directory>`.")
 		}
-		return api.New(api.NewOptions{
+		err := api.New(api.NewOptions{
 			Path:     args[0],
 			Template: template,
 		})
+		if err != nil {
+			return fmt.Errorf("Something went wrong while creating your project. Sorry about that.\n\n  > %w", err)
+		}
+		fmt.Printf(`
+Success! Your new project is ready to go.
+
+  cd %s && pack start
+`, args[0])
+		return nil
 	}
 	return cmd
 }

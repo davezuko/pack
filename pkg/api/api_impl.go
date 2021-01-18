@@ -24,13 +24,13 @@ import (
 
 func newImpl(opts NewOptions) error {
 	if fs.Exists(opts.Path) {
-		return fmt.Errorf("destination already exists")
+		return fmt.Errorf("The destination folder already exists: %s", opts.Path)
 	}
 
-	// Clone template
+	fmt.Printf("> Cloning %s into %s\n", opts.Template, opts.Path)
 	err := exec.Command("git", "clone", opts.Template, opts.Path).Run()
 	if err != nil {
-		return fmt.Errorf("failed to clone template: %w", err)
+		return fmt.Errorf("Failed to clone the project template with git: %w", err)
 	}
 	err = os.RemoveAll(path.Join(opts.Path, ".git"))
 	if err != nil {
@@ -38,11 +38,22 @@ func newImpl(opts NewOptions) error {
 	}
 
 	// Install dependencies
-	cmd := exec.Command("npm", "install")
+	// TODO: only do this if package.json exists _and_ there are dependencies
+	fmt.Printf("> Installing node_modules\n")
+	var cmd *exec.Cmd
+	if opts.Yarn {
+		if fs.Exists("package-lock.json") {
+			os.Remove("package-lock.json")
+		}
+		cmd = exec.Command("yarn", "install")
+	} else {
+		cmd = exec.Command("npm", "install")
+	}
 	cmd.Dir = opts.Path
 	err = cmd.Run()
+
 	if err != nil {
-		return fmt.Errorf("failed to install dependencies: %s", err)
+		return fmt.Errorf("Failed to install project dependencies: %s", err)
 	}
 	return nil
 }

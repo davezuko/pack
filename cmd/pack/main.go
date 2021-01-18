@@ -7,6 +7,8 @@ import (
 	"github.com/davezuko/pack/pkg/cli"
 )
 
+var version = "0.1.0"
+
 var helpText = func() string {
 	return `
 Usage:
@@ -56,7 +58,7 @@ func main() {
 			os.Exit(0)
 
 		case arg == "-v", arg == "--version":
-			fmt.Printf("%s\n", "0.0.0")
+			fmt.Printf("%s\n", version)
 			os.Exit(0)
 		}
 	}

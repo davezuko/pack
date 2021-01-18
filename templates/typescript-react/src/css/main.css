@@ -1,0 +1,11 @@
+@import "./reset.css";
+
+[data-theme="light"] {
+  --site-fg: #111;
+  --site-bg: #eee;
+}
+
+[data-theme="dark"] {
+  --site-fg: #eee;
+  --site-bg: #111;
+}

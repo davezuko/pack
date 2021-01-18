@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/davezuko/pack/pkg/api"
+	"github.com/manifoldco/promptui"
 )
 
 type command struct {
@@ -46,7 +47,7 @@ func runImpl(args []string) {
 			flgs := []string{}
 			argz := []string{}
 			for _, arg := range args[1:] {
-				if strings.HasPrefix("-", arg) {
+				if strings.HasPrefix(arg, "-") {
 					flgs = append(flgs, arg)
 				} else {
 					argz = append(argz, arg)
@@ -107,16 +108,50 @@ func buildCommand() command {
 	return cmd
 }
 
+type projectTemplate struct {
+	Name string
+	Repo string
+}
+
+func templates() []projectTemplate {
+	return []projectTemplate{
+		{Name: "Web App (React)", Repo: "davezuko/pack#templates/typescript-react"},
+		{Name: "Web App (Peact)", Repo: "davezuko/pack#templates/typescript-preact"},
+	}
+}
+
 func newCommand() command {
 	cmd := _newCommand("new")
 
 	var template string
-	cmd.fs.StringVar(&template, "template", "https://github.com/davezuko/html-template", "")
+	cmd.fs.StringVar(&template, "template", "", "")
 
 	cmd.Run = func(args []string) error {
 		if len(args) == 0 {
 			return fmt.Errorf("Missing directory name. Try `pack new <directory>`.")
 		}
+		if template == "" {
+			tmpls := templates()
+			items := make([]string, len(tmpls))
+			for i := range tmpls {
+				items[i] = tmpls[i].Name
+			}
+			prompt := promptui.Select{
+				Label:        "Select a template for your project:",
+				Items:        items,
+				HideHelp:     true,
+				HideSelected: true,
+				Templates: &promptui.SelectTemplates{
+					Label: "{{ . }}",
+				},
+			}
+			i, _, err := prompt.Run()
+			if err != nil {
+				return fmt.Errorf("Cancelled template selection.")
+			}
+			template = tmpls[i].Repo
+		}
+
 		err := api.New(api.NewOptions{
 			Path:     args[0],
 			Template: template,

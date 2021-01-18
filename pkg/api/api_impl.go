@@ -27,12 +27,43 @@ func newImpl(opts NewOptions) error {
 		return fmt.Errorf("The destination folder already exists: %s", opts.Path)
 	}
 
-	fmt.Printf("> Cloning %s into %s\n", opts.Template, opts.Path)
-	err := exec.Command("git", "clone", opts.Template, opts.Path).Run()
-	if err != nil {
-		return fmt.Errorf("Failed to clone the project template with git: %w", err)
+	if !strings.HasPrefix(opts.Template, "http") {
+		opts.Template = "https://github.com/" + opts.Template
 	}
-	err = os.RemoveAll(path.Join(opts.Path, ".git"))
+	parts := strings.Split(opts.Template, "#")
+	repo := parts[0]
+	var subdir string
+	if len(parts) > 1 {
+		subdir = parts[1]
+	}
+
+	fmt.Printf("> Cloning %s into %s\n", repo, opts.Path)
+	
+	// Support cloning a subdirectory with the syntax user/repo#directory. We
+	// still have to clone the whole repository, but we do it into a temporary
+	// directory and only copy over the specified subdirectory.
+	if subdir != "" {
+		tmp, err := ioutil.TempDir("", "pack-new")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(tmp)
+		err = exec.Command("git", "clone", "--depth", "1", repo, tmp).Run()
+		if err != nil {
+			return fmt.Errorf("Failed to clone the project template with git: %w", err)
+		}
+		err = fs.CopyDir(path.Join(tmp, subdir), opts.Path)
+		if err != nil {
+			return err
+		}
+	} else {
+		err := exec.Command("git", "clone", "--depth", "1", repo, opts.Path).Run()
+		if err != nil {
+			return fmt.Errorf("Failed to clone the project template with git: %w", err)
+		}
+	}
+
+	err := os.RemoveAll(path.Join(opts.Path, ".git"))
 	if err != nil {
 		return err
 	}

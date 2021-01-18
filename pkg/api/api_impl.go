@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -232,7 +233,8 @@ func newServer(opts newServerOpts) (ServeResult, error) {
 	if opts.Port == 0 {
 		opts.Port = 3000
 	}
-	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", opts.Host, opts.Port))
+	url := fmt.Sprintf("%s:%d", opts.Host, opts.Port)
+	listener, err := net.Listen("tcp", url)
 	if err != nil {
 		return ServeResult{}, err
 	}
@@ -252,5 +254,25 @@ func newServer(opts newServerOpts) (ServeResult, error) {
 			wait <- nil
 		}
 	}()
+	if opts.Open {
+		open(url)
+	}
 	return result, nil
+}
+
+func open(url string) error {
+    var cmd string
+    var args []string
+
+    switch runtime.GOOS {
+    case "windows":
+        cmd = "cmd"
+        args = []string{"/c", "start"}
+    case "darwin":
+        cmd = "open"
+    default:
+        cmd = "xdg-open"
+    }
+    args = append(args, url)
+    return exec.Command(cmd, args...).Start()
 }

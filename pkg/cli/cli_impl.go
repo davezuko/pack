@@ -1,144 +1,182 @@
 package cli
 
 import (
+	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/davezuko/pack/pkg/api"
 )
 
+type command struct {
+	fs   *flag.FlagSet
+	Name string
+	Run  func(args []string) error
+}
+
 func runImpl(args []string) {
-	var err error
+	commands := []command{
+		buildCommand(),
+		newCommand(),
+		serveCommand(),
+		startCommand(),
+	}
 
 	if args[0] == "help" {
 		if len(args) == 1 {
-			fmt.Printf("Missing command name\n")
-			os.Exit(1)
+			fmt.Printf("\nMissing command for 'pack help <command>'.\n\n")
+			fmt.Printf("Available Commands:\n")
+			for _, cmd := range commands {
+				fmt.Printf("  - %s\n", cmd.Name)
+			}
+			fmt.Println()
+			os.Exit(0)
 		}
-		switch args[1] {
-		case "build":
-			fmt.Printf("%s\n", buildHelp())
-		case "new":
-			fmt.Printf("%s\n", newHelp())
-		case "serve":
-			fmt.Printf("%s\n", serveHelp())
-		case "start":
-			fmt.Printf("%s\n", startHelp())
-		default:
-			err = fmt.Errorf(`
-Unknown command: "%s".
-			
-Tip: run 'pack --help' to see available commands and example usage`, args[1])
+		for _, cmd := range commands {
+			if cmd.Name == args[1] {
+				cmd.fs.PrintDefaults()
+				os.Exit(0)
+			}
 		}
-	} else {
-		switch args[0] {
-		case "build":
-			err = build(args[1:])
-		case "new":
-			err = new(args[1:])
-		case "serve":
-			err = serve(args[1:])
-		case "start":
-			err = start(args[1:])
-		default:
-			err = fmt.Errorf(`
+	}
+
+	for _, cmd := range commands {
+		if cmd.Name == args[0] {
+			flgs := []string{}
+			argz := []string{}
+			for _, arg := range args[1:] {
+				if strings.HasPrefix("-", arg) {
+					flgs = append(flgs, arg)
+				} else {
+					argz = append(argz, arg)
+				}
+			}
+			cmd.fs.Parse(flgs)
+			err := cmd.Run(argz)
+			if err != nil {
+				fmt.Printf("%s\n", err)
+				os.Exit(1)
+			} else {
+				os.Exit(0)
+			}
+		}
+	}
+
+	fmt.Printf(`
 Unknown command: "%s".
 
 Tip: run 'pack --help' to see available commands and example usage`, args[0])
+	os.Exit(1)
+}
+
+func _newCommand(name string) command {
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	return command{fs: fs, Name: name}
+}
+
+func buildCommand() command {
+	cmd := _newCommand("build")
+
+	var bundle bool
+	var minify bool
+	cmd.fs.BoolVar(&bundle, "bundle", true, "")
+	cmd.fs.BoolVar(&minify, "minify", true, "")
+
+	cmd.Run = func(args []string) error {
+		result := api.Build(api.BuildOptions{
+			SourceDir: "src",
+			StaticDir: "static",
+			OutputDir: "dist",
+			Bundle:    bundle,
+			Minify:    minify,
+			Hash:      false,
+		})
+		for _, msg := range result.Warnings {
+			fmt.Printf("Warning: %s\n", msg.Text)
 		}
+		for _, msg := range result.Errors {
+			fmt.Printf("Error: %s\n", msg.Text)
+		}
+		if len(result.Errors) > 0 {
+			return fmt.Errorf("Encountered %d build error(s).", len(result.Errors))
+		}
+		fmt.Printf("Run `pack serve` to host your production build locally.\n")
+		return nil
 	}
-
-	if err != nil {
-		fmt.Printf("%s\n", err)
-		os.Exit(1)
-	}
-	os.Exit(0)
+	return cmd
 }
 
-func build(args []string) error {
-	result := api.Build(api.BuildOptions{
-		SourceDir: "src",
-		StaticDir: "static",
-		OutputDir: "dist",
-		Bundle:    true,
-		Minify:    true,
-		Hash:      true,
-	})
-	for _, msg := range result.Warnings {
-		fmt.Printf("Warning: %s\n", msg.Text)
+func newCommand() command {
+	cmd := _newCommand("new")
+
+	var template string
+	cmd.fs.StringVar(&template, "template", "https://github.com/davezuko/html-template", "")
+
+	cmd.Run = func(args []string) error {
+		if len(args) == 0 {
+			return fmt.Errorf("Missing directory name. Try `pack new <directory>`.")
+		}
+		return api.New(api.NewOptions{
+			Path:     args[0],
+			Template: template,
+		})
 	}
-	for _, msg := range result.Errors {
-		fmt.Printf("Error: %s\n", msg.Text)
-	}
-	if len(result.Errors) > 0 {
-		return fmt.Errorf("Encountered %d build error(s).", len(result.Errors))
-	}
-	fmt.Printf("Run `pack serve` to host your production build locally.\n")
-	return nil
+	return cmd
 }
 
-func buildHelp() string {
-	return ""
+func serveCommand() command {
+	cmd := _newCommand("serve")
+
+	var host string
+	var port uint
+	var open bool
+	cmd.fs.StringVar(&host, "host", "localhost", "server host")
+	cmd.fs.UintVar(&port, "port", 3000, "server port")
+	cmd.fs.BoolVar(&open, "open", false, "automatically open the server")
+
+	cmd.Run = func(args []string) error {
+		result, err := api.Serve(api.ServeOptions{
+			Path: "dist",
+			Host: host,
+			Port: uint16(port),
+			Open: open,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Server running at %s://%s:%d\n", "http", result.Host, result.Port)
+		result.Wait()
+		return nil
+	}
+	return cmd
 }
 
-func new(args []string) error {
-	if len(args) == 0 {
-		fmt.Printf(`
-You must provide the name of the project you want to initialize.
+func startCommand() command {
+	cmd := _newCommand("start")
 
-# Example:
-pack new <my-project>
-`)
-		os.Exit(1)
-	}
-	opts := api.NewOptions{}
-	opts.Path = args[0]
-	if opts.Template == "" {
-		opts.Template = "https://github.com/davezuko/html-template"
-	}
-	err := api.New(opts)
-	if err != nil {
-		return err
-	}
-	return nil
-}
+	var host string
+	var port uint
+	var open bool
+	cmd.fs.StringVar(&host, "host", "localhost", "server host")
+	cmd.fs.UintVar(&port, "port", 3000, "server port")
+	cmd.fs.BoolVar(&open, "open", false, "automatically open the server")
 
-func newHelp() string {
-	return ""
-}
-
-func serve(args []string) error {
-	opts := api.ServeOptions{
-		Path: "dist",
+	cmd.Run = func(args []string) error {
+		result, err := api.Start(api.StartOptions{
+			Bundle:    true,
+			SourceDir: "src",
+			StaticDir: "static",
+			Host:      host,
+			Port:      uint16(port),
+			Open:      open,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Server running at %s://%s:%d\n", "http", result.Host, result.Port)
+		result.Wait()
+		return nil
 	}
-	result, err := api.Serve(opts)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Server running at %s://%s:%d\n", "http", result.Host, result.Port)
-	result.Wait()
-	return nil
-}
-
-func serveHelp() string {
-	return ""
-}
-
-func start(args []string) error {
-	opts := api.StartOptions{
-		Bundle:    true,
-		SourceDir: "src",
-		StaticDir: "static",
-	}
-	result, err := api.Start(opts)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Server running at %s://%s:%d\n", "http", result.Host, result.Port)
-	result.Wait()
-	return nil
-}
-
-func startHelp() string {
-	return ""
+	return cmd
 }

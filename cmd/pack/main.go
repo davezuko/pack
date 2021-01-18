@@ -46,13 +46,13 @@ Run 'pack help <command>' for more information on specific commands.
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
-		fmt.Printf("%s", helpText())
+		fmt.Printf(helpText())
 		os.Exit(0)
 	}
 	for _, arg := range args {
 		switch {
 		case arg == "-h", arg == "-help", arg == "--help", arg == "/?":
-			fmt.Printf("%s", helpText())
+			fmt.Printf(helpText())
 			os.Exit(0)
 
 		case arg == "-v", arg == "--version":

@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
 )
 
 func Exists(path string) bool {
@@ -77,4 +78,13 @@ func CopyFile(src, dst string) error {
 		return err
 	}
 	return os.Chmod(dst, srcinfo.Mode())
+}
+
+func WriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	// TODO: race condition with concurrent writes?
+	if err := os.MkdirAll(dir, perm); err != nil {
+		return err
+	}
+	return ioutil.WriteFile(path, data, perm)
 }

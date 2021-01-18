@@ -47,8 +47,9 @@ var markAllImportsAsExternal = esbuild.Plugin{
 }
 
 type Bundler struct {
-	Bundle    func(files []string) esbuild.BuildResult
-	Transform func(file string) esbuild.BuildResult
+	Bundle     func(files []string) esbuild.BuildResult
+	Transform  func(file string) esbuild.BuildResult
+	BundleDisk func(files []string, outdir string) esbuild.BuildResult // TODO: rethink
 }
 
 type NewOptions struct {
@@ -75,6 +76,12 @@ func New(opts NewOptions) Bundler {
 		Bundle: func(files []string) esbuild.BuildResult {
 			opts := buildOptions
 			opts.EntryPoints = files
+			return esbuild.Build(opts)
+		},
+		BundleDisk: func(files []string, outdir string) esbuild.BuildResult {
+			opts := buildOptions
+			opts.EntryPoints = files
+			opts.Outdir = outdir
 			return esbuild.Build(opts)
 		},
 		Transform: func(file string) esbuild.BuildResult {
@@ -109,44 +116,44 @@ func NewPackageBundler() PackageBundler {
 	}
 }
 
-type HTMLEntry struct {
+type OutputFile struct {
 	Path     string
-	Document *goquery.Document
-	Scripts  []string
+	Contents []byte
 }
 
-func NewHTMLEntry(path string) (entry HTMLEntry, err error) {
-	f, err := os.Open(path)
+type BundleHTMLOptions struct {
+	Bundler   Bundler
+	Path      string
+	SourceDir string
+	OutputDir string
+}
+
+type BundleHTMLResult struct {
+	OutputFiles []OutputFile
+	Errors      []string
+}
+
+func BundleHTML(opts BundleHTMLOptions) (result BundleHTMLResult) {
+	result.Errors = []string{}
+
+	f, err := os.Open(opts.Path)
 	if err != nil {
+		result.Errors = append(result.Errors, err.Error())
 		return
 	}
 	defer f.Close()
 
 	doc, err := goquery.NewDocumentFromReader(f)
 	if err != nil {
+		result.Errors = append(result.Errors, err.Error())
 		return
 	}
-	return HTMLEntry{Path: path, Document: doc}, nil
-}
 
-type HTMLBundleOptions struct {
-	Bundler
-	SourceDir string
-}
-type HTMLBundleResult struct {
-	HTML    string
-	Scripts []OutputFile
-}
+	// src/path/to/index.html -> dist/path/to/index.html
+	outfile, _ := filepath.Rel(opts.SourceDir, opts.Path)
+	outfile = path.Join(opts.OutputDir, outfile)
 
-type OutputFile struct {
-	Path     string
-	Contents []byte
-}
-
-func (h *HTMLEntry) Bundle(opts HTMLBundleOptions) (HTMLBundleResult, error) {
-	result := HTMLBundleResult{}
-
-	nodes := h.Document.Find("script")
+	nodes := doc.Find("script")
 	scripts := make([]string, 0, nodes.Length())
 	nodes.Each(func(i int, s *goquery.Selection) {
 		uri, _ := s.Attr("src")
@@ -157,49 +164,54 @@ func (h *HTMLEntry) Bundle(opts HTMLBundleOptions) (HTMLBundleResult, error) {
 		}
 	})
 
-	// nodes = h.Document.Find("link")
-	// styles := make([]string, 0, nodes.Length())
-	// nodes.Each(func(i int, s *goquery.Selection) {
-	// 	uri, _ := s.Attr("href")
-	// 	// TODO: join logic incorrect for relative paths
-	// 	if strings.HasPrefix(uri, "./") || (strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, "//")) {
-	// 		scripts = append(scripts, path.Join(opts.SourceDir, uri))
-	// 		s.Remove()
-	// 	}
-	// })
+	nodes = doc.Find("link")
+	styles := make([]string, 0, nodes.Length())
+	nodes.Each(func(i int, s *goquery.Selection) {
+		uri, _ := s.Attr("href")
+		// TODO: join logic incorrect for relative paths
+		if strings.HasPrefix(uri, "./") || (strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, "//")) {
+			styles = append(styles, path.Join(opts.SourceDir, uri))
+			s.Remove()
+		}
+	})
 
-	if len(scripts) == 0 {
-		html, _ := h.Document.Html()
-		result.HTML = html
-		result.Scripts = []OutputFile{}
-		return result, nil
-	}
-	if len(scripts) > 1 {
-		return result, fmt.Errorf("only a single local script is currently supported")
-	}
-
-	entries := make([]string, 0, len(scripts))
+	entries := make([]string, 0, len(scripts)+len(styles))
 	entries = append(entries, scripts...)
+	entries = append(entries, styles...)
+	// fmt.Printf("entries = %s\n", entries)
 
-	bundleResult := opts.Bundle(scripts)
-	// fmt.Printf("%#v\n", bundleResult)
-
-	if len(bundleResult.OutputFiles) == 0 {
-		html, _ := h.Document.Html()
-		result.HTML = html
-		result.Scripts = []OutputFile{}
-		return result, fmt.Errorf("internal bundler error (no files emitted)")
+	if len(entries) == 0 {
+		html, _ := doc.Html()
+		result.OutputFiles = []OutputFile{{Path: outfile, Contents: []byte(html)}}
+		return
 	}
 
-	src := scripts[0]
-	src = strings.Replace(src, path.Ext(src), ".js", 1)
-	src, _ = filepath.Rel(opts.SourceDir, src)
-	body := h.Document.Find("body")
-	body.AppendHtml(fmt.Sprintf("<script src=\"%s\"></script>", src))
-	html, _ := h.Document.Html()
-	result.HTML = html
-	result.Scripts = []OutputFile{
-		{Path: src, Contents: bundleResult.OutputFiles[0].Contents},
+	bundleResult := opts.Bundler.BundleDisk(entries, opts.OutputDir)
+	if len(bundleResult.Errors) > 0 {
+		for i := range bundleResult.Errors {
+			result.Errors = append(result.Errors, bundleResult.Errors[i].Text)
+		}
+		return
 	}
-	return result, nil
+
+	result.OutputFiles = make([]OutputFile, 0, len(bundleResult.OutputFiles)+1)
+	head := doc.Find("head")
+	body := doc.Find("body")
+	cwd, _ := os.Getwd()
+	outdir := path.Join(cwd, opts.OutputDir)
+	for _, f := range bundleResult.OutputFiles {
+		p, _ := filepath.Rel(outdir, f.Path)
+		switch path.Ext(p) {
+		case ".css":
+			head.AppendHtml(fmt.Sprintf("<link rel=\"stylesheet\" href=\"%s\" />", p))
+		case ".js":
+			// TODO: which scripts should be appended?
+			// TODO: script type?
+			body.AppendHtml(fmt.Sprintf("<script src=\"%s\"></script>", p))
+		}
+		result.OutputFiles = append(result.OutputFiles, OutputFile{Path: path.Join(opts.OutputDir, p), Contents: f.Contents})
+	}
+	html, _ := doc.Html()
+	result.OutputFiles = append(result.OutputFiles, OutputFile{Path: outfile, Contents: []byte(html)})
+	return
 }

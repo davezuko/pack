@@ -38,7 +38,7 @@ func newImpl(opts NewOptions) error {
 	}
 
 	fmt.Printf("> Cloning %s into %s\n", repo, opts.Path)
-	
+
 	// Support cloning a subdirectory with the syntax user/repo#directory. We
 	// still have to clone the whole repository, but we do it into a temporary
 	// directory and only copy over the specified subdirectory.
@@ -144,6 +144,7 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 }
 
 func sendBuildResult(res http.ResponseWriter, result esbuild.BuildResult) {
+	fmt.Printf("result = %#v\n", result)
 	if len(result.OutputFiles) != 1 {
 		res.WriteHeader(http.StatusServiceUnavailable)
 	} else {
@@ -168,7 +169,7 @@ func buildImpl(opts BuildOptions) BuildResult {
 	m := minify.New()
 	m.AddFunc("text/html", html.Minify)
 	bdl := bundler.New(bundler.NewOptions{
-		Mode:   "development",
+		Mode:   "production",
 		Minify: opts.Minify,
 	})
 
@@ -183,6 +184,8 @@ func buildImpl(opts BuildOptions) BuildResult {
 	}
 
 	var wg sync.WaitGroup
+
+	// TODO: consider sending writable assets to channel, not writing directly
 	filepath.Walk(opts.SourceDir, func(sourceFile string, info os.FileInfo, _ error) error {
 		if info.IsDir() {
 			return nil
@@ -196,35 +199,35 @@ func buildImpl(opts BuildOptions) BuildResult {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				entry, err := bundler.NewHTMLEntry(sourceFile)
-				if err != nil {
-					log.AddError(fmt.Sprintf("failed to load %s: %s", sourceFile, err))
-					return
-				}
-				result, err := entry.Bundle(bundler.HTMLBundleOptions{
-					SourceDir: opts.SourceDir,
+				result := bundler.BundleHTML(bundler.BundleHTMLOptions{
 					Bundler:   bdl,
+					Path:      sourceFile,
+					SourceDir: opts.SourceDir,
+					OutputDir: opts.OutputDir,
 				})
-				if err != nil {
-					log.AddError(fmt.Sprintf("failed to build %s: %s", sourceFile, err))
-				}
-				html := result.HTML
-				if opts.Minify {
-					minified, err := m.String("text/html", html)
-					if err != nil {
-						log.AddWarning(fmt.Sprintf("failed to minify %s: %s", sourceFile, err))
-					} else {
-						html = minified
+				if len(result.Errors) > 0 {
+					log.AddError("failed to build " + sourceFile)
+					for _, err := range result.Errors {
+						log.AddError(err)
 					}
-				}
-				outFile, _ := filepath.Rel(opts.SourceDir, sourceFile)
-				outFile = path.Join(opts.OutputDir, outFile)
-				fmt.Printf("emit: %s\n", outFile)
-				ioutil.WriteFile(outFile, []byte(html), 0755)
-				for _, file := range result.Scripts {
-					outFile := path.Join(opts.OutputDir, file.Path)
-					fmt.Printf("emit: %s\n", outFile)
-					ioutil.WriteFile(outFile, file.Contents, 0755)
+				} else {
+					for _, f := range result.OutputFiles {
+						if opts.Minify {
+							if path.Ext(f.Path) == ".html" {
+								dat, err := m.Bytes("text/html", f.Contents)
+								if err != nil {
+									log.AddWarning(fmt.Sprintf("failed to minify %s: %s", f.Path, err.Error()))
+								} else {
+									f.Contents = dat
+								}
+							}
+						}
+						fmt.Printf("emit: %s\n", f.Path)
+						err := fs.WriteFile(f.Path, f.Contents, 0755)
+						if err != nil {
+							log.AddError(fmt.Sprintf("failed to write %s: %s", f.Path, err.Error()))
+						}
+					}
 				}
 			}()
 		default:
@@ -303,18 +306,18 @@ func newServer(opts newServerOpts) (ServeResult, error) {
 }
 
 func open(url string) error {
-    var cmd string
-    var args []string
+	var cmd string
+	var args []string
 
-    switch runtime.GOOS {
-    case "windows":
-        cmd = "cmd"
-        args = []string{"/c", "start"}
-    case "darwin":
-        cmd = "open"
-    default:
-        cmd = "xdg-open"
-    }
-    args = append(args, url)
-    return exec.Command(cmd, args...).Start()
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "cmd"
+		args = []string{"/c", "start"}
+	case "darwin":
+		cmd = "open"
+	default:
+		cmd = "xdg-open"
+	}
+	args = append(args, url)
+	return exec.Command(cmd, args...).Start()
 }

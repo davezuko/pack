@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,9 @@ import (
 
 	"github.com/davezuko/pack/internal/bundler"
 	"github.com/davezuko/pack/internal/fs"
+	"github.com/davezuko/pack/internal/logger"
+	"github.com/tdewolff/minify/v2"
+	"github.com/tdewolff/minify/v2/html"
 )
 
 func newImpl(opts NewOptions) error {
@@ -43,18 +47,12 @@ func newImpl(opts NewOptions) error {
 }
 
 func startImpl(opts StartOptions) (ServeResult, error) {
-	if opts.SourceDir == "" {
-		opts.SourceDir = "src"
-	}
-	if opts.StaticDir == "" {
-		opts.StaticDir = "static"
-	}
-
+	b := bundler.New(bundler.NewOptions{Mode: "development"})
+	pkgBundler := bundler.NewPackageBundler()
 	sources := http.FileServer(http.Dir(opts.SourceDir))
 	statics := http.FileServer(http.Dir(opts.StaticDir))
-	pkgBundler := bundler.NewPackageBundler()
 	handler := http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
-		if !(req.Method == "GET" && strings.HasPrefix(req.URL.Path, "/")) {
+		if req.Method != "GET" || !strings.HasPrefix(req.URL.Path, "/") {
 			res.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			res.WriteHeader(http.StatusNotFound)
 			res.Write([]byte("404 - Not Found"))
@@ -64,12 +62,12 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 		query := path.Clean(req.URL.Path)
 		srcPath := path.Join(opts.SourceDir, query)
 
-		fmt.Printf("Request: %s\n", query)
+		// fmt.Printf("Request: %s\n", query)
 		if strings.HasPrefix(query, "/web_modules") {
 			pkg := query
 			pkg = strings.Replace(pkg, "/web_modules/", "", 1)
 			pkg = strings.Replace(pkg, ".js", "", 1)
-			result := pkgBundler.Build(pkg)
+			result := pkgBundler.Bundle(pkg)
 			sendBuildResult(res, result)
 			return
 		}
@@ -84,10 +82,10 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 		switch path.Ext(query) {
 		case ".ts", ".tsx":
 			if opts.Bundle {
-				result := bundler.Bundle(srcPath)
+				result := b.Bundle([]string{srcPath})
 				sendBuildResult(res, result)
 			} else {
-				result := bundler.Transform(srcPath)
+				result := b.Transform(srcPath)
 				sendBuildResult(res, result)
 			}
 		default:
@@ -112,9 +110,6 @@ func sendBuildResult(res http.ResponseWriter, result esbuild.BuildResult) {
 }
 
 func serveImpl(opts ServeOptions) (ServeResult, error) {
-	if opts.Path == "" {
-		opts.Path = "dist"
-	}
 	statics := http.Dir(opts.Path)
 	handler := http.HandlerFunc(http.FileServer(statics).ServeHTTP)
 	return newServer(newServerOpts{
@@ -125,24 +120,102 @@ func serveImpl(opts ServeOptions) (ServeResult, error) {
 	})
 }
 
-func buildImpl(opts BuildOptions) (BuildResult, error) {
-	fs.Clean(opts.OutputDir)
-	fs.CopyDir(opts.StaticDir, opts.OutputDir)
+func buildImpl(opts BuildOptions) BuildResult {
+	log := logger.New()
+	m := minify.New()
+	m.AddFunc("text/html", html.Minify)
+	bdl := bundler.New(bundler.NewOptions{
+		Mode:   "development",
+		Minify: opts.Minify,
+	})
+
+	if err := fs.Clean(opts.OutputDir); err != nil {
+		log.AddError(fmt.Sprintf("failed to clean output directory: %s", err))
+		return loggerToBuildResult(log)
+	}
+	if fs.Exists(opts.StaticDir) {
+		if err := fs.CopyDir(opts.StaticDir, opts.OutputDir); err != nil {
+			log.AddError(fmt.Sprintf("failed to copy static directory: %s", err))
+		}
+	}
 
 	var wg sync.WaitGroup
-	filepath.Walk(opts.SourceDir, func(path string, info os.FileInfo, _ error) error {
+	filepath.Walk(opts.SourceDir, func(sourceFile string, info os.FileInfo, _ error) error {
 		if info.IsDir() {
 			return nil
 		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-		}()
+		switch path.Ext(sourceFile) {
+		case ".js", ".ts", ".tsx":
+			// noop, these should get bundled
+			// TODO: warn on unreferenced scripts?
+		case ".html":
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				entry, err := bundler.NewHTMLEntry(sourceFile)
+				if err != nil {
+					log.AddError(fmt.Sprintf("failed to load %s: %s", sourceFile, err))
+					return
+				}
+				result, err := entry.Bundle(bundler.HTMLBundleOptions{
+					SourceDir: opts.SourceDir,
+					Bundler:   bdl,
+				})
+				if err != nil {
+					log.AddError(fmt.Sprintf("failed to build %s: %s", sourceFile, err))
+				}
+				html := result.HTML
+				if opts.Minify {
+					minified, err := m.String("text/html", html)
+					if err != nil {
+						log.AddWarning(fmt.Sprintf("failed to minify %s: %s", sourceFile, err))
+					} else {
+						html = minified
+					}
+				}
+				outFile, _ := filepath.Rel(opts.SourceDir, sourceFile)
+				outFile = path.Join(opts.OutputDir, outFile)
+				fmt.Printf("emit: %s\n", outFile)
+				ioutil.WriteFile(outFile, []byte(html), 0755)
+				for _, file := range result.Scripts {
+					outFile := path.Join(opts.OutputDir, file.Path)
+					fmt.Printf("emit: %s\n", outFile)
+					ioutil.WriteFile(outFile, file.Contents, 0755)
+				}
+			}()
+		default:
+			// copy as-is
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				outFile, _ := filepath.Rel(opts.SourceDir, sourceFile)
+				outFile = path.Join(opts.OutputDir, outFile)
+				err := fs.CopyFile(sourceFile, outFile)
+				if err != nil {
+					log.AddError(fmt.Sprintf("could not copy %s: %s", outFile, err))
+				} else {
+					fmt.Printf("emit: %s\n", outFile)
+				}
+			}()
+		}
 		return nil
 	})
 	wg.Wait()
-	return BuildResult{}, nil
+	return loggerToBuildResult(log)
+}
+
+func loggerToBuildResult(log logger.Log) BuildResult {
+	result := BuildResult{}
+	result.Errors = make([]Message, len(log.Errors()))
+	result.Warnings = make([]Message, len(log.Warnings()))
+	for i, msg := range log.Errors() {
+		result.Errors[i] = Message{Text: msg.Data.Text}
+	}
+	for i, msg := range log.Warnings() {
+		result.Warnings[i] = Message{Text: msg.Data.Text}
+	}
+	return result
 }
 
 type newServerOpts struct {

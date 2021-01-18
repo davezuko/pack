@@ -48,7 +48,7 @@ func CopyDir(src string, dst string) error {
 				return err
 			}
 		} else {
-			if err = copyFile(srcfp, dstfp); err != nil {
+			if err = CopyFile(srcfp, dstfp); err != nil {
 				return err
 			}
 		}
@@ -56,7 +56,7 @@ func CopyDir(src string, dst string) error {
 	return nil
 }
 
-func copyFile(src, dst string) error {
+func CopyFile(src, dst string) error {
 	var err error
 	var srcfd *os.File
 	var dstfd *os.File

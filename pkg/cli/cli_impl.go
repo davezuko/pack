@@ -26,9 +26,9 @@ func runImpl(args []string) {
 			fmt.Printf("%s\n", startHelp())
 		default:
 			err = fmt.Errorf(`
-			Unknown command: "%s".
+Unknown command: "%s".
 			
-			Tip: run 'pack --help' to see available commands and example usage`, args[1])
+Tip: run 'pack --help' to see available commands and example usage`, args[1])
 		}
 	} else {
 		switch args[0] {
@@ -56,6 +56,24 @@ Tip: run 'pack --help' to see available commands and example usage`, args[0])
 }
 
 func build(args []string) error {
+	result := api.Build(api.BuildOptions{
+		SourceDir: "src",
+		StaticDir: "static",
+		OutputDir: "dist",
+		Bundle:    true,
+		Minify:    true,
+		Hash:      true,
+	})
+	for _, msg := range result.Warnings {
+		fmt.Printf("Warning: %s\n", msg.Text)
+	}
+	for _, msg := range result.Errors {
+		fmt.Printf("Error: %s\n", msg.Text)
+	}
+	if len(result.Errors) > 0 {
+		return fmt.Errorf("Encountered %d build error(s).", len(result.Errors))
+	}
+	fmt.Printf("Run `pack serve` to host your production build locally.\n")
 	return nil
 }
 
@@ -90,8 +108,15 @@ func newHelp() string {
 }
 
 func serve(args []string) error {
-	opts := api.ServeOptions{}
-	api.Serve(opts)
+	opts := api.ServeOptions{
+		Path: "dist",
+	}
+	result, err := api.Serve(opts)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Server running at %s://%s:%d\n", "http", result.Host, result.Port)
+	result.Wait()
 	return nil
 }
 
@@ -100,7 +125,11 @@ func serveHelp() string {
 }
 
 func start(args []string) error {
-	opts := api.StartOptions{}
+	opts := api.StartOptions{
+		Bundle:    true,
+		SourceDir: "src",
+		StaticDir: "static",
+	}
 	result, err := api.Start(opts)
 	if err != nil {
 		return err

@@ -55,7 +55,7 @@ type Message struct {
 // Build builds the project to options.OutputDir and optimizes assets for
 // production. The output directory will be a self-contained application
 // and suitable for deployment to a static CDN.
-func Build(opts BuildOptions) (BuildResult, error) {
+func Build(opts BuildOptions) BuildResult {
 	return buildImpl(opts)
 }
 

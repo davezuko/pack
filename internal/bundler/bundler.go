@@ -47,9 +47,8 @@ var markAllImportsAsExternal = esbuild.Plugin{
 }
 
 type Bundler struct {
-	Bundle     func(files []string) esbuild.BuildResult
-	Transform  func(file string) esbuild.BuildResult
-	BundleDisk func(files []string, outdir string) esbuild.BuildResult // TODO: rethink
+	Bundle    func(files []string) esbuild.BuildResult
+	Transform func(file string) esbuild.BuildResult
 }
 
 type NewOptions struct {
@@ -66,6 +65,12 @@ func New(opts NewOptions) Bundler {
 		Format:   esbuild.FormatESModule,
 		LogLevel: esbuild.LogLevelSilent,
 		Define:   defines,
+		// OutputFiles aren't actually written, so this dir doesn't
+		// need to be configurable. We just need a value so that:
+		// 1. esbuild can emit > 1 file
+		// 2. we can strip the output directory from all OutputFiles
+		// before returning to the caller. They never see "dist".
+		Outdir: "/dist",
 	}
 	if opts.Minify {
 		buildOptions.MinifySyntax = true
@@ -76,13 +81,11 @@ func New(opts NewOptions) Bundler {
 		Bundle: func(files []string) esbuild.BuildResult {
 			opts := buildOptions
 			opts.EntryPoints = files
-			return esbuild.Build(opts)
-		},
-		BundleDisk: func(files []string, outdir string) esbuild.BuildResult {
-			opts := buildOptions
-			opts.EntryPoints = files
-			opts.Outdir = outdir
-			return esbuild.Build(opts)
+			result := esbuild.Build(opts)
+			for i := range result.OutputFiles {
+				result.OutputFiles[i].Path = strings.TrimPrefix(result.OutputFiles[i].Path, "/dist/")
+			}
+			return result
 		},
 		Transform: func(file string) esbuild.BuildResult {
 			opts := buildOptions
@@ -93,39 +96,15 @@ func New(opts NewOptions) Bundler {
 	}
 }
 
-type PackageBundler struct {
-	Bundle func(pkg string) esbuild.BuildResult
-}
-
-func NewPackageBundler() PackageBundler {
-	// cache  := make(map[string]esbuild.BuildResult)
-	defines := map[string]string{
-		"process.env.NODE_ENV": "\"development\"",
-	}
-	return PackageBundler{
-		Bundle: func(pkg string) esbuild.BuildResult {
-			return esbuild.Build(esbuild.BuildOptions{
-				Bundle:      true,
-				EntryPoints: []string{pkg},
-				Format:      esbuild.FormatESModule,
-				LogLevel:    esbuild.LogLevelSilent,
-				Define:      defines,
-				Plugins:     []esbuild.Plugin{rewritePackageImports},
-			})
-		},
-	}
-}
-
 type OutputFile struct {
 	Path     string
 	Contents []byte
 }
 
 type BundleHTMLOptions struct {
-	Bundler   Bundler
-	Path      string
-	SourceDir string
-	OutputDir string
+	Bundler Bundler
+	Path    string
+	Root    string
 }
 
 type BundleHTMLResult struct {
@@ -149,36 +128,42 @@ func BundleHTML(opts BundleHTMLOptions) (result BundleHTMLResult) {
 		return
 	}
 
-	// src/path/to/index.html -> dist/path/to/index.html
-	outfile, _ := filepath.Rel(opts.SourceDir, opts.Path)
-	outfile = path.Join(opts.OutputDir, outfile)
+	// <root>/path/to/index.html -> path/to/index.html
+	outfile, _ := filepath.Rel(opts.Root, opts.Path)
 
-	nodes := doc.Find("script")
-	scripts := make([]string, 0, nodes.Length())
-	nodes.Each(func(i int, s *goquery.Selection) {
-		uri, _ := s.Attr("src")
-		// TODO: join logic incorrect for relative paths
-		if strings.HasPrefix(uri, "./") || (strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, "//")) {
-			scripts = append(scripts, path.Join(opts.SourceDir, uri))
-			s.Remove()
+	// Consume all local scripts and stylesheets from the html document
+	entries := []string{}
+	doc.Find("script").Each(func(i int, s *goquery.Selection) {
+		if uri, ok := s.Attr("src"); ok {
+			if uri == "" {
+				return // warn?
+			}
+			switch {
+			case strings.HasPrefix(uri, "./"):
+				entries = append(entries, path.Join(path.Dir(opts.Path), uri))
+				s.Remove()
+			case strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, "//"):
+				entries = append(entries, path.Join(opts.Root, uri))
+				s.Remove()
+			}
+		}
+
+	})
+	doc.Find("link").Each(func(i int, s *goquery.Selection) {
+		if uri, ok := s.Attr("href"); ok {
+			if uri == "" {
+				return // warn?
+			}
+			switch {
+			case strings.HasPrefix(uri, "./"):
+				entries = append(entries, path.Join(path.Dir(opts.Path), uri))
+				s.Remove()
+			case strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, "//"):
+				entries = append(entries, path.Join(opts.Root, uri))
+				s.Remove()
+			}
 		}
 	})
-
-	nodes = doc.Find("link")
-	styles := make([]string, 0, nodes.Length())
-	nodes.Each(func(i int, s *goquery.Selection) {
-		uri, _ := s.Attr("href")
-		// TODO: join logic incorrect for relative paths
-		if strings.HasPrefix(uri, "./") || (strings.HasPrefix(uri, "/") && !strings.HasPrefix(uri, "//")) {
-			styles = append(styles, path.Join(opts.SourceDir, uri))
-			s.Remove()
-		}
-	})
-
-	entries := make([]string, 0, len(scripts)+len(styles))
-	entries = append(entries, scripts...)
-	entries = append(entries, styles...)
-	// fmt.Printf("entries = %s\n", entries)
 
 	if len(entries) == 0 {
 		html, _ := doc.Html()
@@ -186,7 +171,7 @@ func BundleHTML(opts BundleHTMLOptions) (result BundleHTMLResult) {
 		return
 	}
 
-	bundleResult := opts.Bundler.BundleDisk(entries, opts.OutputDir)
+	bundleResult := opts.Bundler.Bundle(entries)
 	if len(bundleResult.Errors) > 0 {
 		for i := range bundleResult.Errors {
 			result.Errors = append(result.Errors, bundleResult.Errors[i].Text)
@@ -197,20 +182,18 @@ func BundleHTML(opts BundleHTMLOptions) (result BundleHTMLResult) {
 	result.OutputFiles = make([]OutputFile, 0, len(bundleResult.OutputFiles)+1)
 	head := doc.Find("head")
 	body := doc.Find("body")
-	cwd, _ := os.Getwd()
-	outdir := path.Join(cwd, opts.OutputDir)
 	for _, f := range bundleResult.OutputFiles {
-		p, _ := filepath.Rel(outdir, f.Path)
-		switch path.Ext(p) {
+		switch path.Ext(f.Path) {
 		case ".css":
-			head.AppendHtml(fmt.Sprintf("<link rel=\"stylesheet\" href=\"%s\" />", p))
+			head.AppendHtml(fmt.Sprintf("<link rel=\"stylesheet\" href=\"%s\" />", f.Path))
 		case ".js":
 			// TODO: which scripts should be appended?
-			// TODO: script type?
-			body.AppendHtml(fmt.Sprintf("<script src=\"%s\"></script>", p))
+			// TODO: consider script type?
+			body.AppendHtml(fmt.Sprintf("<script src=\"%s\"></script>", f.Path))
 		}
-		result.OutputFiles = append(result.OutputFiles, OutputFile{Path: path.Join(opts.OutputDir, p), Contents: f.Contents})
+		result.OutputFiles = append(result.OutputFiles, OutputFile{Path: f.Path, Contents: f.Contents})
 	}
+
 	html, _ := doc.Html()
 	result.OutputFiles = append(result.OutputFiles, OutputFile{Path: outfile, Contents: []byte(html)})
 	return

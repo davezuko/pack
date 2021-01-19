@@ -85,24 +85,30 @@ func buildCommand() command {
 	cmd.fs.BoolVar(&minify, "minify", true, "")
 
 	cmd.Run = func(args []string) error {
-		result := api.Build(api.BuildOptions{
+		opts := api.BuildOptions{
 			SourceDir: "src",
 			StaticDir: "static",
 			OutputDir: "dist",
 			Bundle:    bundle,
 			Minify:    minify,
 			Hash:      false,
-		})
+		}
+		result := api.Build(opts)
 		for _, msg := range result.Warnings {
-			fmt.Printf("Warning: %s\n", msg.Text)
+			fmt.Printf("[warning]: %s\n", msg.Text)
 		}
 		for _, msg := range result.Errors {
-			fmt.Printf("Error: %s\n", msg.Text)
+			fmt.Printf("[error]: %s\n", msg.Text)
 		}
 		if len(result.Errors) > 0 {
-			return fmt.Errorf("Encountered %d build error(s).", len(result.Errors))
+			if len(result.Errors) == 1 {
+				return fmt.Errorf("Build failed with 1 error.")
+			} else {
+				return fmt.Errorf("Build failed with %d errors.", len(result.Errors))
+			}
 		}
-		fmt.Printf("Run `pack serve` to host your production build locally.\n")
+		fmt.Printf("\nSuccessfully built your application to ./%s\n", opts.OutputDir)
+		fmt.Printf("\nRun `pack serve` to host your production build locally.\n")
 		return nil
 	}
 	return cmd

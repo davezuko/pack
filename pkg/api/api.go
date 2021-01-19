@@ -45,8 +45,13 @@ type BuildOptions struct {
 
 // BuildResult provides diagnostic information about a build.
 type BuildResult struct {
-	Errors   []Message
-	Warnings []Message
+	Errors      []Message
+	Warnings    []Message
+	OutputFiles []OutputFile
+}
+
+type OutputFile struct {
+	Path string
 }
 
 type Message struct {

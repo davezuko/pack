@@ -91,7 +91,6 @@ func newImpl(opts NewOptions) error {
 
 func startImpl(opts StartOptions) (ServeResult, error) {
 	b := bundler.New(bundler.NewOptions{Mode: "development"})
-	pkgBundler := bundler.NewPackageBundler()
 	sources := http.FileServer(http.Dir(opts.SourceDir))
 	statics := http.FileServer(http.Dir(opts.StaticDir))
 	handler := http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
@@ -105,16 +104,6 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 		query := path.Clean(req.URL.Path)
 		srcPath := path.Join(opts.SourceDir, query)
 
-		// fmt.Printf("Request: %s\n", query)
-		if strings.HasPrefix(query, "/web_modules") {
-			pkg := query
-			pkg = strings.Replace(pkg, "/web_modules/", "", 1)
-			pkg = strings.Replace(pkg, ".js", "", 1)
-			result := pkgBundler.Bundle(pkg)
-			sendBuildResult(res, result)
-			return
-		}
-
 		// if file does not exist in the source directory, fall back to serving
 		// it from the static directory.
 		if !fs.Exists(srcPath) {
@@ -123,14 +112,11 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 		}
 
 		switch path.Ext(query) {
+		case ".js", ".mjs":
+			// TODO: .js transform behind a flag?
+			serveBundleResult(res, b.Bundle([]string{srcPath}))
 		case ".ts", ".tsx":
-			if opts.Bundle {
-				result := b.Bundle([]string{srcPath})
-				sendBuildResult(res, result)
-			} else {
-				result := b.Transform(srcPath)
-				sendBuildResult(res, result)
-			}
+			serveBundleResult(res, b.Bundle([]string{srcPath}))
 		default:
 			sources.ServeHTTP(res, req)
 		}
@@ -143,8 +129,7 @@ func startImpl(opts StartOptions) (ServeResult, error) {
 	})
 }
 
-func sendBuildResult(res http.ResponseWriter, result esbuild.BuildResult) {
-	fmt.Printf("result = %#v\n", result)
+func serveBundleResult(res http.ResponseWriter, result esbuild.BuildResult) {
 	if len(result.OutputFiles) != 1 {
 		res.WriteHeader(http.StatusServiceUnavailable)
 	} else {
@@ -168,14 +153,14 @@ func buildImpl(opts BuildOptions) BuildResult {
 	log := logger.New()
 	m := minify.New()
 	m.AddFunc("text/html", html.Minify)
-	bdl := bundler.New(bundler.NewOptions{
+	b := bundler.New(bundler.NewOptions{
 		Mode:   "production",
 		Minify: opts.Minify,
 	})
 
 	if err := fs.Clean(opts.OutputDir); err != nil {
 		log.AddError(fmt.Sprintf("failed to clean output directory: %s", err))
-		return loggerToBuildResult(log)
+		return toPublicBuildResult(log)
 	}
 	if fs.Exists(opts.StaticDir) {
 		if err := fs.CopyDir(opts.StaticDir, opts.OutputDir); err != nil {
@@ -186,12 +171,15 @@ func buildImpl(opts BuildOptions) BuildResult {
 	var wg sync.WaitGroup
 
 	// TODO: consider sending writable assets to channel, not writing directly
-	filepath.Walk(opts.SourceDir, func(sourceFile string, info os.FileInfo, _ error) error {
+	filepath.Walk(opts.SourceDir, func(path string, info os.FileInfo, _ error) error {
 		if info.IsDir() {
 			return nil
 		}
 
-		switch path.Ext(sourceFile) {
+		switch filepath.Ext(path) {
+		case ".css":
+			// TODO: currently noop (expects to be bundled). Should copy file if not
+			// imported?
 		case ".js", ".ts", ".tsx":
 			// noop, these should get bundled
 			// TODO: warn on unreferenced scripts?
@@ -200,20 +188,21 @@ func buildImpl(opts BuildOptions) BuildResult {
 			go func() {
 				defer wg.Done()
 				result := bundler.BundleHTML(bundler.BundleHTMLOptions{
-					Bundler:   bdl,
-					Path:      sourceFile,
-					SourceDir: opts.SourceDir,
-					OutputDir: opts.OutputDir,
+					Bundler: b,
+					Path:    path,
+					Root:    opts.SourceDir,
 				})
 				if len(result.Errors) > 0 {
-					log.AddError("failed to build " + sourceFile)
-					for _, err := range result.Errors {
-						log.AddError(err)
+					err := "failed to build " + path
+					for _, e := range result.Errors {
+						err += "\n  " + e
 					}
+					log.AddError(err)
 				} else {
 					for _, f := range result.OutputFiles {
+						f.Path = filepath.Join(opts.OutputDir, f.Path)
 						if opts.Minify {
-							if path.Ext(f.Path) == ".html" {
+							if filepath.Ext(f.Path) == ".html" {
 								dat, err := m.Bytes("text/html", f.Contents)
 								if err != nil {
 									log.AddWarning(fmt.Sprintf("failed to minify %s: %s", f.Path, err.Error()))
@@ -222,7 +211,6 @@ func buildImpl(opts BuildOptions) BuildResult {
 								}
 							}
 						}
-						fmt.Printf("emit: %s\n", f.Path)
 						err := fs.WriteFile(f.Path, f.Contents, 0755)
 						if err != nil {
 							log.AddError(fmt.Sprintf("failed to write %s: %s", f.Path, err.Error()))
@@ -235,9 +223,9 @@ func buildImpl(opts BuildOptions) BuildResult {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				outFile, _ := filepath.Rel(opts.SourceDir, sourceFile)
-				outFile = path.Join(opts.OutputDir, outFile)
-				err := fs.CopyFile(sourceFile, outFile)
+				outFile, _ := filepath.Rel(opts.SourceDir, path)
+				outFile = filepath.Join(opts.OutputDir, outFile)
+				err := fs.CopyFile(path, outFile)
 				if err != nil {
 					log.AddError(fmt.Sprintf("could not copy %s: %s", outFile, err))
 				} else {
@@ -248,16 +236,16 @@ func buildImpl(opts BuildOptions) BuildResult {
 		return nil
 	})
 	wg.Wait()
-	return loggerToBuildResult(log)
+	return toPublicBuildResult(log)
 }
 
-func loggerToBuildResult(log logger.Log) BuildResult {
+func toPublicBuildResult(log logger.Log) BuildResult {
 	result := BuildResult{}
 	result.Errors = make([]Message, len(log.Errors()))
-	result.Warnings = make([]Message, len(log.Warnings()))
 	for i, msg := range log.Errors() {
 		result.Errors[i] = Message{Text: msg.Data.Text}
 	}
+	result.Warnings = make([]Message, len(log.Warnings()))
 	for i, msg := range log.Warnings() {
 		result.Warnings[i] = Message{Text: msg.Data.Text}
 	}

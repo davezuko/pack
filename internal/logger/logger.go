@@ -40,17 +40,17 @@ func (kind MessageKind) String() string {
 
 func New() Log {
 	var msgs []Message
-	var mutex sync.Mutex
+	var mu sync.Mutex
 
 	return Log{
 		AddMessage: func(msg Message) {
-			mutex.Lock()
-			defer mutex.Unlock()
+			mu.Lock()
+			defer mu.Unlock()
 			msgs = append(msgs, msg)
 		},
 		Warnings: func() []Message {
-			mutex.Lock()
-			defer mutex.Unlock()
+			mu.Lock()
+			defer mu.Unlock()
 			warnings := []Message{}
 			for _, msg := range msgs {
 				if msg.Kind == Warning {
@@ -60,19 +60,19 @@ func New() Log {
 			return warnings
 		},
 		Errors: func() []Message {
-			mutex.Lock()
-			defer mutex.Unlock()
+			mu.Lock()
+			defer mu.Unlock()
 			errors := []Message{}
 			for _, msg := range msgs {
-				if msg.Kind == Warning {
+				if msg.Kind == Error {
 					errors = append(errors, msg)
 				}
 			}
 			return errors
 		},
 		Done: func() []Message {
-			mutex.Lock()
-			defer mutex.Unlock()
+			mu.Lock()
+			defer mu.Unlock()
 			return msgs
 		},
 	}

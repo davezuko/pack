@@ -177,7 +177,7 @@ func serveCommand() command {
 	var open bool
 	cmd.fs.StringVar(&host, "host", "localhost", "server host")
 	cmd.fs.UintVar(&port, "port", 3000, "server port")
-	cmd.fs.BoolVar(&open, "open", false, "automatically open the server")
+	cmd.fs.BoolVar(&open, "open", false, "automatically open browser")
 
 	cmd.Run = func(args []string) error {
 		result, err := api.Serve(api.ServeOptions{
@@ -204,7 +204,7 @@ func startCommand() command {
 	var open bool
 	cmd.fs.StringVar(&host, "host", "localhost", "server host")
 	cmd.fs.UintVar(&port, "port", 3000, "server port")
-	cmd.fs.BoolVar(&open, "open", false, "automatically open the server")
+	cmd.fs.BoolVar(&open, "open", false, "automatically open browser")
 
 	cmd.Run = func(args []string) error {
 		result, err := api.Start(api.StartOptions{

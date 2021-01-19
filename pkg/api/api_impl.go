@@ -300,7 +300,7 @@ func newServer(opts newServerOpts) (ServeResult, error) {
 		}
 	}()
 	if opts.Open {
-		open(url)
+		open("http://" + url)
 	}
 	return result, nil
 }

@@ -122,7 +122,7 @@ type projectTemplate struct {
 func templates() []projectTemplate {
 	return []projectTemplate{
 		{Name: "Web App (React)", Repo: "davezuko/pack#templates/typescript-react"},
-		{Name: "Web App (Peact)", Repo: "davezuko/pack#templates/typescript-preact"},
+		{Name: "Web App (Preact)", Repo: "davezuko/pack#templates/typescript-preact"},
 	}
 }
 
@@ -130,7 +130,9 @@ func newCommand() command {
 	cmd := _newCommand("new")
 
 	var template string
+	var yarn bool
 	cmd.fs.StringVar(&template, "template", "", "")
+	cmd.fs.BoolVar(&yarn, "yarn", false, "install dependencies with yarn")
 
 	cmd.Run = func(args []string) error {
 		if len(args) == 0 {
@@ -161,6 +163,7 @@ func newCommand() command {
 		err := api.New(api.NewOptions{
 			Path:     args[0],
 			Template: template,
+			Yarn:     yarn,
 		})
 		if err != nil {
 			return fmt.Errorf("Something went wrong while creating your project. Sorry about that.\n\n  > %w", err)

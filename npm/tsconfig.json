@@ -1,0 +1,15 @@
+{
+    "include": ["src"],
+    "compilerOptions": {
+        "outDir": "dist",
+        "target": "ES2019",
+        "module": "commonjs",
+        "moduleResolution": "node",
+        "lib": ["ES2019", "dom"],
+        "strict": true,
+        "declaration": true,
+        "skipLibCheck": true,
+        "importHelpers": true,
+        "noEmitHelpers": true
+    }
+}

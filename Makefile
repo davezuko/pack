@@ -6,3 +6,9 @@ install:
 
 publish:
 	@test master = "`git rev-parse --abbrev-ref HEAD`" || (echo "Refusing to publish from non-master branch `git rev-parse --abbrev-ref HEAD`" && false)
+
+.PHONY: npm
+npm:
+	cd npm; rm -rf dist
+	cd npm; npx tsc --outDir dist/cjs --module commonjs
+	cd npm; npx tsc --outDir dist/ejs --module esnext
